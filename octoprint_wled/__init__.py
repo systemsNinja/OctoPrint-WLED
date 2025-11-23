@@ -9,6 +9,29 @@ from octoprint_wled.wled import WLED
 
 __version__ = _version.get_versions()["version"]
 
+class SegmentWrapper:
+    """
+    Intercepts calls to the WLED Master/Update methods
+    and forces them to execute on a specific Segment ID.
+    """
+    def __init__(self, wled_client, segment_id):
+        self._client = wled_client
+        self._segment_id = int(segment_id)
+
+    def master(self, **kwargs):
+        # Redirects .master() calls to the configured segment
+        return self._client.segment(self._segment_id).update(**kwargs)
+
+    def update(self, **kwargs):
+        # Redirects .update() calls to the configured segment
+        return self._client.segment(self._segment_id).update(**kwargs)
+    
+    def preset(self, **kwargs):
+        return self._client.segment(self._segment_id).update(**kwargs)
+
+    def __getattr__(self, name):
+        # Pass any other unknown calls straight to the original client
+        return getattr(self._client, name)
 
 class WLEDPlugin(
     octoprint.plugin.ShutdownPlugin,
@@ -51,7 +74,24 @@ class WLEDPlugin(
     def init_wled(self) -> None:
         if self._settings.get(["connection", "host"]):
             # host is defined, we can try connecting
-            self.wled = WLED(**get_wled_params(self._settings))
+            # 1. Create the standard client
+            original_wled = WLED(**get_wled_params(self._settings))
+            
+            # 2. Check if a segment ID is configured
+            seg_id = self._settings.get(["connection", "segment_id"])
+            
+            # 3. Apply wrapper only if seg_id is not empty
+            if seg_id is not None and str(seg_id).strip() != "":
+                try:
+                    # Wrap the client to force the specific segment
+                    self.wled = SegmentWrapper(original_wled, seg_id)
+                    self._logger.info(f"WLED initialized for Segment {seg_id}")
+                except ValueError:
+                    self._logger.error("Invalid WLED Segment ID. Using default.")
+                    self.wled = original_wled
+            else:
+                # No segment specified, use default behavior
+                self.wled = original_wled
         else:
             self.wled = None
 
@@ -231,6 +271,7 @@ class WLEDPlugin(
         return {
             "connection": {
                 "host": "",
+                "segment_id": "",
                 "auth": False,
                 "username": None,
                 "password": "",

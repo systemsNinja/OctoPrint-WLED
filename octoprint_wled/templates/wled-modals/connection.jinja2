@@ -23,6 +23,13 @@
                 </div>
             </div>
             <div class="control-group">
+                <label class="control-label">Target Segment ID</label>
+                <div class="controls">
+                    <input type="number" class="input-mini" placeholder="Optional (e.g. 1)" data-bind="value: settingsViewModel.settings.plugins.wled.connection.segment_id">
+                    <span class="help-inline">Leave empty to control all segments (Master). Enter '0', '1', etc. to restrict control.</span>
+                </div>
+            </div>                        
+            <div class="control-group">
                 <label class="control-label">
                     Request Timout:
                 </label>
