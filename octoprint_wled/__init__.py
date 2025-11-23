@@ -11,41 +11,34 @@ __version__ = _version.get_versions()["version"]
 
 class SegmentWrapper:
     """
-    Intercepts calls to the WLED Master/Update methods
-    and forces them to execute on a specific Segment ID.
-    Directly constructs payloads to avoid 'NoneType' crashes on startup.
+    Intercepts calls to the WLED Master/Update methods.
+    Safely handles cases where WLED hasn't finished connecting yet.
     """
     def __init__(self, wled_client, segment_id):
         self._client = wled_client
         self._segment_id = int(segment_id)
 
-    def master(self, **kwargs):
-        # Bypass the Segment object and send the JSON payload directly.
-        # This fixes the crash where the segment list hasn't loaded yet.
+    def _safe_update(self, **kwargs):
+        # Try to get the specific segment object
+        seg = self._client.segment(self._segment_id)
         
-        # 1. Handle argument mapping (OctoPrint sends 'brightness', WLED expects 'bri')
-        if "brightness" in kwargs:
-            kwargs["bri"] = kwargs.pop("brightness")
+        # If seg is None, it means WLED is not connected or hasn't synced the segment list yet.
+        if seg is None:
+            # Log a warning to the console/log so you know it was skipped, but DO NOT CRASH.
+            print(f"[WLED Plugin] Warning: Segment {self._segment_id} not found yet. Skipping command.")
+            return None
+            
+        # If we have the segment, update it normally
+        return seg.update(**kwargs)
 
-        # 2. Construct the WLED JSON API payload for a specific segment
-        # {"seg": [{"id": 1, "on": true, "bri": 255}]}
-        payload = {"seg": [{"id": self._segment_id, **kwargs}]}
-        
-        # 3. Send via the main client's request method
-        return self._client.request(payload)
+    def master(self, **kwargs):
+        return self._safe_update(**kwargs)
 
     def update(self, **kwargs):
-        # Same logic as master
-        if "brightness" in kwargs:
-            kwargs["bri"] = kwargs.pop("brightness")
-        
-        payload = {"seg": [{"id": self._segment_id, **kwargs}]}
-        return self._client.request(payload)
+        return self._safe_update(**kwargs)
     
     def preset(self, **kwargs):
-        # Presets are also segment-specific in modern WLED
-        payload = {"seg": [{"id": self._segment_id, **kwargs}]}
-        return self._client.request(payload)
+        return self._safe_update(**kwargs)
 
     def __getattr__(self, name):
         # Pass any other unknown calls straight to the original client
