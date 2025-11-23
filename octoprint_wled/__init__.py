@@ -13,22 +13,43 @@ class SegmentWrapper:
     """
     Intercepts calls to the WLED Master/Update methods.
     Safely handles cases where WLED hasn't finished connecting yet.
+    Translates On/Off commands into Brightness commands to ensure Segments react.
     """
     def __init__(self, wled_client, segment_id):
         self._client = wled_client
         self._segment_id = int(segment_id)
 
     def _safe_update(self, **kwargs):
-        # Try to get the specific segment object
-        seg = self._client.segment(self._segment_id)
-        
-        # If seg is None, it means WLED is not connected or hasn't synced the segment list yet.
-        if seg is None:
-            # Log a warning to the console/log so you know it was skipped, but DO NOT CRASH.
-            print(f"[WLED Plugin] Warning: Segment {self._segment_id} not found yet. Skipping command.")
+        # 1. Try to get the specific segment object
+        try:
+            seg = self._client.segment(self._segment_id)
+        except Exception:
             return None
+        
+        # 2. Connection check
+        if seg is None:
+            return None
+
+        # 3. INTERCEPT: Translate "on" (True/False) to Brightness (0-255)
+        # This fixes the issue where WLED ignores segment power commands.
+        if "on" in kwargs:
+            should_be_on = kwargs["on"]
             
-        # If we have the segment, update it normally
+            if should_be_on:
+                # If turning ON, ensure we have a brightness set. 
+                # If none provided, force max brightness (255) so it's visible.
+                if "brightness" not in kwargs and "bri" not in kwargs:
+                    kwargs["bri"] = 255
+            else:
+                # If turning OFF, force brightness to 0.
+                # This visually guarantees the segment turns off.
+                kwargs["bri"] = 0
+
+        # 4. Map OctoPrint's "brightness" key to WLED's "bri" key
+        if "brightness" in kwargs:
+            kwargs["bri"] = kwargs.pop("brightness")
+            
+        # 5. Execute the update
         return seg.update(**kwargs)
 
     def master(self, **kwargs):
@@ -41,7 +62,6 @@ class SegmentWrapper:
         return self._safe_update(**kwargs)
 
     def __getattr__(self, name):
-        # Pass any other unknown calls straight to the original client
         return getattr(self._client, name)
 
 class WLEDPlugin(
