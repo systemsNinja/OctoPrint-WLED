@@ -13,21 +13,39 @@ class SegmentWrapper:
     """
     Intercepts calls to the WLED Master/Update methods
     and forces them to execute on a specific Segment ID.
+    Directly constructs payloads to avoid 'NoneType' crashes on startup.
     """
     def __init__(self, wled_client, segment_id):
         self._client = wled_client
         self._segment_id = int(segment_id)
 
     def master(self, **kwargs):
-        # Redirects .master() calls to the configured segment
-        return self._client.segment(self._segment_id).update(**kwargs)
+        # Bypass the Segment object and send the JSON payload directly.
+        # This fixes the crash where the segment list hasn't loaded yet.
+        
+        # 1. Handle argument mapping (OctoPrint sends 'brightness', WLED expects 'bri')
+        if "brightness" in kwargs:
+            kwargs["bri"] = kwargs.pop("brightness")
+
+        # 2. Construct the WLED JSON API payload for a specific segment
+        # {"seg": [{"id": 1, "on": true, "bri": 255}]}
+        payload = {"seg": [{"id": self._segment_id, **kwargs}]}
+        
+        # 3. Send via the main client's request method
+        return self._client.request(payload)
 
     def update(self, **kwargs):
-        # Redirects .update() calls to the configured segment
-        return self._client.segment(self._segment_id).update(**kwargs)
+        # Same logic as master
+        if "brightness" in kwargs:
+            kwargs["bri"] = kwargs.pop("brightness")
+        
+        payload = {"seg": [{"id": self._segment_id, **kwargs}]}
+        return self._client.request(payload)
     
     def preset(self, **kwargs):
-        return self._client.segment(self._segment_id).update(**kwargs)
+        # Presets are also segment-specific in modern WLED
+        payload = {"seg": [{"id": self._segment_id, **kwargs}]}
+        return self._client.request(payload)
 
     def __getattr__(self, name):
         # Pass any other unknown calls straight to the original client
