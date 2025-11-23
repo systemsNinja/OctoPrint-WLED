@@ -55,7 +55,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       
-      # FIX: Changed from 3.7 to 3.9 to fix the "Version not found" error
       - name: 🏗 Set up Python 3.9
         uses: actions/setup-python@v5
         with:
@@ -64,7 +63,8 @@ jobs:
       - name: 🏗 Set up dependencies
         run: |
           pip install octoprint[develop]
-          pip install .
+          # FIX: Added --no-build-isolation to use installed OctoPrint
+          pip install --no-build-isolation .
           pip install pre-commit
       
       - name: 🚀 Run pre-commit
@@ -97,7 +97,6 @@ jobs:
     needs: build
     strategy:
       matrix:
-        # FIX: Removed 3.7 and 3.8. Only testing 3.9 and 3.10 now.
         python: ["3.9", "3.10"]
     runs-on: ubuntu-latest
     steps:
@@ -114,4 +113,5 @@ jobs:
       
       - name: 🚀 Test install of plugin
         run: |
-          pip install .
+          # FIX: Added --no-build-isolation here too
+          pip install --no-build-isolation .
