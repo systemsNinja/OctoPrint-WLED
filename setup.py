@@ -23,10 +23,8 @@ plugin_package = "octoprint_wled"
 plugin_name = "OctoPrint-WLED-SegmentControl"
 
 # The plugin's version. Can be overwritten within OctoPrint's internal data via __plugin_version__ in the plugin module
-#plugin_version = versioneer.get_version()
-#plugin_cmdclass = versioneer.get_cmdclass()
-plugin_version = "0.2.2" # or whatever version you want
-plugin_cmdclass = {} # Empty dictionary overrides the versioneer command
+plugin_version = versioneer.get_version()
+plugin_cmdclass = versioneer.get_cmdclass()
 
 # The plugin's description. Can be overwritten within OctoPrint's internal data via __plugin_description__ in the plugin
 # module
