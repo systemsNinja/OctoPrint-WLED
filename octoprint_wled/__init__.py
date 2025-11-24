@@ -40,6 +40,8 @@ class WLEDPlugin(
         self.current_progress: int = 0
 
     def initialize(self) -> None:
+        # Called after all injections complete, startup of plugin
+        # These sub-modules depend on the rest of the plugin to be initialized.
         self.init_wled()
         self.api = api.PluginAPI(self)
         self.events = events.PluginEventHandler(self)
@@ -47,48 +49,36 @@ class WLEDPlugin(
         self.progress = progress.PluginProgressHandler(self)
 
     def init_wled(self) -> None:
-        # TEST MODE: Simplified Init. 
-        # We are ignoring the segment setting here and hardcoding it in the button below.
         if self._settings.get(["connection", "host"]):
+            # host is defined, we can try connecting
             self.wled = WLED(**get_wled_params(self._settings))
         else:
             self.wled = None
 
     def activate_lights(self) -> None:
-        self._logger.info("TESTING: Turning Segment 1 ON")
-        
-        # Define the function that does the work
-        def turn_seg1_on():
-            # 1. Get the segment object for ID 1
-            seg = self.wled.segment(1)
-            # 2. Update it (Bright 255, On True)
-            return seg.update(on=True, bri=255)
+        self._logger.info("Turning WLED lights on")
+        self.runner.wled_call(
+        self.wled.segment,
+        kwargs={"segment_id": 1, "on": True}
+        )
 
-        # Send it to the runner
-        self.runner.wled_call(turn_seg1_on)
-
+        # Notify the UI
+        # WARNING: this still occurs even if there was an error above - it prevents crucial blocking
+        # in the gcode & temperatures received hooks. Which is bad, which is why this is not sync.
         self.send_message("lights", {"on": True})
         self.lights_on = True
 
     def deactivate_lights(self) -> None:
-        self._logger.info("TESTING: Turning Segment 1 OFF")
-        
-        def turn_seg1_off():
-            # 1. Get the segment object for ID 1
-            seg = self.wled.segment(1)
-            # 2. Update it (Bright 0, On False)
-            return seg.update(on=False, bri=0)
+        self._logger.info("Turning WLED lights off")
+        self.runner.wled_call(
+        self.wled.segment,
+        kwargs={"segment_id": 1, "on": False}
+        )
 
-        # Send it to the runner
-        self.runner.wled_call(turn_seg1_off)
-
+        # See above for explanation of why this does not mean it was a success
         self.send_message("lights", {"on": False})
         self.lights_on = False
 
-    # -------------------------------------------------------------------------
-    # EVERYTHING BELOW THIS LINE IS UNCHANGED
-    # -------------------------------------------------------------------------
-    
     # Gcode tracking hook
     def process_gcode_queue(
         self,
@@ -104,11 +94,12 @@ class WLEDPlugin(
     ):
         if gcode in constants.BLOCKING_TEMP_GCODES.keys():
             self.heating = True
-            self.cooling = False  
+            self.cooling = False  # can't do both at the same time...
             self.current_heater_heating = constants.BLOCKING_TEMP_GCODES[gcode]
 
         else:
             if self.heating:
+                # Currently heating, now stopping
                 self.heating = False
                 if self._printer.is_printing():
                     self.progress.return_to_print_progress()
@@ -122,22 +113,28 @@ class WLEDPlugin(
     ):
         tool_key = self._settings.get(["progress", "heating", "tool_key"])
 
+        # Find the tool target temperature
         try:
             tool_target = parsed_temps[f"T{tool_key}"][1]
         except KeyError:
+            # Tool number was invalid, stick to whatever saved previously
             tool_target = self.target_temperature["tool"]
 
+        # We don't always get the target when the printer is heating, instead None
         if tool_target is None or tool_target <= 0:
             tool_target = self.target_temperature["tool"]
 
+        # Find the bed target temperature
         try:
             bed_target = parsed_temps["B"][1]
         except KeyError:
+            # Bed doesn't exist? Probably won't need bed temp
             bed_target = self.target_temperature["tool"]
 
         if bed_target is None or bed_target <= 0:
             bed_target = self.target_temperature["bed"]
 
+        # Save these for later, so that they can be used on the next round for the above
         self.target_temperature["tool"] = tool_target
         self.target_temperature["bed"] = bed_target
 
@@ -153,6 +150,7 @@ class WLEDPlugin(
                     f"{heater} not found, can't show progress - check config"
                 )
                 self.heating = False
+                # self.process_previous_event()
                 return parsed_temps
 
             value = calculate_heating_progress(
@@ -175,6 +173,7 @@ class WLEDPlugin(
 
             if current < self._settings.get_int(["progress", "cooling", "threshold"]):
                 self.cooling = False
+                # Run PRINT_DONE again, instead of when it actually happened.
                 self.events.update_effect("success")
                 return parsed_temps
 
@@ -185,8 +184,10 @@ class WLEDPlugin(
             self._logger.debug(f"Cooling, progress {value}%")
             self.progress.on_cooling_progress(value)
 
+        # MUST always return parsed_temps
         return parsed_temps
 
+    # @ command handling - commands defined in constants.py
     def process_at_command(
         self, comm, phase, cmd: str, parameters: str, tags=None, *args, **kwargs
     ):
@@ -203,6 +204,7 @@ class WLEDPlugin(
         elif parameters == constants.AT_PARAM_OFF:
             self.deactivate_lights()
 
+    # SimpleApiPlugin
     def get_api_commands(self) -> Dict[str, List[Optional[str]]]:
         return self.api.get_api_commands()
 
@@ -212,25 +214,29 @@ class WLEDPlugin(
     def on_api_get(self, request):
         return self.api.on_api_get(request)
 
+    # UI Notifier
     def send_message(self, msg_type: str, msg_content: dict):
         self._plugin_manager.send_plugin_message(
             "wled", {"type": msg_type, "content": msg_content}
         )
 
+    # Event handling
     def on_event(self, event, payload):
         self.events.on_event(event, payload)
 
+    # Print Progress handling
     def on_print_progress(self, storage, path, progress_value):
         self.progress.on_print_progress(progress_value)
 
+    # Shutdown handling
     def on_shutdown(self):
         self.runner.kill()
 
+    # SettingsPlugin
     def get_settings_defaults(self) -> Dict[str, Any]:
         return {
             "connection": {
                 "host": "",
-                "segment_id": "",
                 "auth": False,
                 "username": None,
                 "password": "",
@@ -241,19 +247,166 @@ class WLEDPlugin(
             },
             "effects": {
                 "idle": {"enabled": True, "settings": []},
-                "disconnected": {"enabled": True, "settings": []},
-                "failed": {"enabled": True, "settings": []},
-                "started": {"enabled": False, "settings": []},
-                "success": {"enabled": True, "settings": []},
-                "paused": {"enabled": True, "settings": []},
+                "disconnected": {
+                    "enabled": True,
+                    "settings": [
+                        {
+                            "brightness": 200,
+                            "color_primary": "#000000",
+                            "color_secondary": "#000000",
+                            "color_tertiary": "#000000",
+                            "effect": "Rainbow",
+                            "id": 0,
+                            "intensity": 127,
+                            "override_on": False,
+                            "speed": 127,
+                            "unique_id": "CcU-Mih1",
+                        }
+                    ],
+                },
+                "failed": {
+                    "enabled": True,
+                    "settings": [
+                        {
+                            "brightness": 200,
+                            "color_primary": "#00ff2a",
+                            "color_secondary": "#000000",
+                            "color_tertiary": "#000000",
+                            "effect": "Wipe",
+                            "id": 0,
+                            "intensity": 127,
+                            "override_on": False,
+                            "speed": 127,
+                            "unique_id": "21pW5WCy",
+                        }
+                    ],
+                },
+                "started": {
+                    "enabled": False,
+                    "settings": [
+                        {
+                            "brightness": 200,
+                            "color_primary": "#ffffff",
+                            "color_secondary": "#000000",
+                            "color_tertiary": "#000000",
+                            "effect": "Solid",
+                            "id": 0,
+                            "intensity": 127,
+                            "override_on": False,
+                            "speed": 127,
+                            "unique_id": "5N8Sa14y",
+                        }
+                    ],
+                },
+                "success": {
+                    "enabled": True,
+                    "settings": [
+                        {
+                            "brightness": 200,
+                            "color_primary": "#1adb00",
+                            "color_secondary": "#000000",
+                            "color_tertiary": "#000000",
+                            "effect": "Washing Machine",
+                            "id": 0,
+                            "intensity": 127,
+                            "override_on": False,
+                            "speed": 127,
+                            "unique_id": "POL9wP_Y",
+                        }
+                    ],
+                },
+                "paused": {
+                    "enabled": True,
+                    "settings": [
+                        {
+                            "brightness": 200,
+                            "color_primary": "#3e33e1",
+                            "color_secondary": "#000000",
+                            "color_tertiary": "#1fdaff",
+                            "effect": "Sinelon Dual",
+                            "id": 0,
+                            "intensity": 127,
+                            "override_on": False,
+                            "speed": "45",
+                            "unique_id": "WtKQwSu0",
+                        }
+                    ],
+                },
+                # example settings entry, per segment
+                # {
+                #   "unique_id": 0              # UNIQUE internal ID of this segment. So it can be edited easily
+                #   "id": 0,                    # Segment ID
+                #   "brightness": 100,          # Segment brightness
+                #   "color_primary": #ff0000,   # Effect colour 1
+                #   "color_secondary": #00ff00  # Effect colour 2
+                #   "color_tertiary": #0000ff,  # Effect colour 3
+                #   "effect": "Solid",          # Effect name
+                #   "intensity": 100,           # Effect intensity
+                #   "speed": 100                # Effect speed
+                #   "override_on": True         # Always turn the LEDs on
+                # }
+                # These should be created by the UI in this way, using the effect editor.
+                # It is *not* recommended that you configure these manually, it will probably go wrong.
+                # TO ADD ANYTHING TO THIS LIST a settings migration should be configured. See TP-Link Smartplug plugin
+                # for inspiration :)
             },
             "progress": {
-                "print": {"enabled": True, "settings": []},
-                "heating": {"enabled": True, "settings": [], "tool": True, "bed": True, "tool_key": "0"},
-                "cooling": {"enabled": True, "settings": [], "bed_or_tool": "tool", "tool_key": "0", "threshold": "40"}
+                "print": {
+                    "enabled": True,
+                    "settings": [
+                        {
+                            "brightness": 200,
+                            "color_primary": "#00ff59",
+                            "color_secondary": "#bb2525",
+                            "id": 0,
+                            "override_on": False,
+                            "unique_id": "yqvg8h0c",
+                        }
+                    ],
+                },
+                "heating": {
+                    "enabled": True,
+                    "settings": [
+                        {
+                            "brightness": 200,
+                            "color_primary": "#bb2525",
+                            "color_secondary": "#0083f5",
+                            "id": 0,
+                            "override_on": False,
+                            "unique_id": "sduhc3fh",
+                        }
+                    ],
+                    "tool": True,
+                    "bed": True,
+                    "tool_key": "0",
+                },
+                "cooling": {
+                    "enabled": True,
+                    "settings": [
+                        {
+                            "brightness": 200,
+                            "color_primary": "#bb2525",
+                            "color_secondary": "#0083f5",
+                            "id": 0,
+                            "override_on": False,
+                            "unique_id": "argrsh53",
+                        }
+                    ],
+                    "bed_or_tool": "tool",
+                    "tool_key": "0",
+                    "threshold": "40",
+                }
+                # Progress effects have a similar layout to the above, HOWEVER without:
+                # * color_tertiary
+                # * effect
+                # * speed
+                # * intensity (controlled by progress value)
             },
             "development": False,
-            "features": {"atcommand": True, "return_to_idle": 0},
+            "features": {
+                "atcommand": True,
+                "return_to_idle": 0,
+            },
         }
 
     def get_settings_version(self):
@@ -264,34 +417,57 @@ class WLEDPlugin(
         self.init_wled()
         self.events.restart()
 
+    # AssetPlugin
     def get_assets(self) -> Dict[str, List[str]]:
         if self._settings.get_boolean(["development"]):
             js = ["src/wled.js"]
         else:
             js = ["dist/wled.js"]
-        return {"js": js, "css": ["dist/wled.css"]}
 
+        return {
+            "js": js,
+            "css": ["dist/wled.css"],
+        }
+
+    # TemplatePlugin
     def get_template_vars(self):
-        return {"version": self._plugin_version}
+        return {
+            "version": self._plugin_version,
+        }
 
+    # Software Update hook
     def get_update_information(self) -> dict:
         return {
             "wled": {
                 "displayName": "WLED Connection",
                 "displayVersion": self._plugin_version,
+                # version check: github repository
                 "type": "github_release",
                 "user": "cp2004",
                 "repo": "OctoPrint-WLED",
                 "current": self._plugin_version,
-                "stable_branch": {"name": "Stable", "branch": "main", "comittish": ["main"]},
-                "prerelease_branches": [{"name": "Release Candidate", "branch": "pre-release", "comittish": ["pre-release", "main"]}],
+                "stable_branch": {
+                    "name": "Stable",
+                    "branch": "main",
+                    "comittish": ["main"],
+                },
+                "prerelease_branches": [
+                    {
+                        "name": "Release Candidate",
+                        "branch": "pre-release",
+                        "comittish": ["pre-release", "main"],
+                    }
+                ],
+                # update method: pip
                 "pip": "https://github.com/cp2004/OctoPrint-WLED/releases/download/{target_version}/release.zip",
             }
         }
 
+
 __plugin_name__ = "WLED Connection"
 __plugin_version__ = __version__
 __plugin_pythoncompat__ = ">=3.7,<4"
+
 
 def __plugin_load__():
     global __plugin_implementation__
