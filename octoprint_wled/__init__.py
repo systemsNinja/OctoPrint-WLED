@@ -57,25 +57,47 @@ class WLEDPlugin(
 
     def activate_lights(self) -> None:
         self._logger.info("Turning WLED lights on")
-        self.runner.wled_call(
-        self.wled.segment,
-        kwargs={"segment_id": 1, "on": True}
-        )
+        
+        segment_id = self._settings.get(["connection", "segment_id"])
+        
+        if segment_id is not None and segment_id != "":
+            # Control specific segment
+            try:
+                segment_id = int(segment_id)
+                self._logger.info(f"Controlling segment {segment_id}")
+                self.runner.wled_call(self.wled.segment, args=(segment_id,), kwargs={"on": True})
+            except (ValueError, TypeError):
+                self._logger.error(f"Invalid segment ID: {segment_id}, falling back to master control")
+                self.runner.wled_call(self.wled.master, kwargs={"on": True})
+        else:
+            # Control all segments (master)
+            self._logger.info("Controlling all segments (master)")
+            self.runner.wled_call(self.wled.master, kwargs={"on": True})
 
         # Notify the UI
-        # WARNING: this still occurs even if there was an error above - it prevents crucial blocking
-        # in the gcode & temperatures received hooks. Which is bad, which is why this is not sync.
         self.send_message("lights", {"on": True})
         self.lights_on = True
 
     def deactivate_lights(self) -> None:
         self._logger.info("Turning WLED lights off")
-        self.runner.wled_call(
-        self.wled.segment,
-        kwargs={"segment_id": 1, "on": False}
-        )
+        
+        segment_id = self._settings.get(["connection", "segment_id"])
+        
+        if segment_id is not None and segment_id != "":
+            # Control specific segment
+            try:
+                segment_id = int(segment_id)
+                self._logger.info(f"Controlling segment {segment_id}")
+                self.runner.wled_call(self.wled.segment, args=(segment_id,), kwargs={"on": False})
+            except (ValueError, TypeError):
+                self._logger.error(f"Invalid segment ID: {segment_id}, falling back to master control")
+                self.runner.wled_call(self.wled.master, kwargs={"on": False})
+        else:
+            # Control all segments (master)
+            self._logger.info("Controlling all segments (master)")
+            self.runner.wled_call(self.wled.master, kwargs={"on": False})
 
-        # See above for explanation of why this does not mean it was a success
+        # Notify the UI
         self.send_message("lights", {"on": False})
         self.lights_on = False
 
@@ -244,6 +266,7 @@ class WLEDPlugin(
                 "request_timeout": 2,
                 "tls": False,
                 "verify_ssl": True,
+                "segment_id": None,  
             },
             "effects": {
                 "idle": {"enabled": True, "settings": []},
